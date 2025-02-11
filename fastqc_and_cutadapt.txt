@@ -1,0 +1,25 @@
+# To run fastqc:
+fastqc --noextract --nogroup -o fastqc *.fastq.gz
+
+# To run cutadapt:
+cutadapt -a ADAPTER_SEQUENCE -A ADAPTER_SEQUENCE_R2 -o trimmed_R1.fastq -p trimmed_R2.fastq R1.fastq R2.fastq
+
+# For sanger data:
+cutadapt -a TGTAAAACGACGGCCAGT -A CAGGAAACAGCTATGAC -o trimmed_R1.fastq -p trimmed_R2.fastq R1.fastq R2.fastq
+
+# Downloading human reference genome fasta and gtf files:
+wget ftp://ftp.ensembl.org/pub/release-99/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+wget ftp://ftp.ensembl.org/pub/release-99/gtf/homo_sapiens/Homo_sapiens.GRCh38.99.gtf.gz
+gunzip *.gz
+
+# Running STAR for the reference genome:
+STAR --runThreadN 64 --runMode genomeGenerate --genomeDir /data/genomes/h38/STAR/ --genomeFastaFiles /data/genomes/h38/STAR/Homo_sapiens.GRCh38.dna.primary_assembly.fa --sjdbGTFfile /data/genomes/h38/STAR/Homo_sapiens.GRCh38.99.gtf
+
+# Running STAR for mapping reads of our FASTQ:
+STAR --runThreadN 64 --genomeDir /data/genomes/h38/STAR --outFilterType BySJout --outFilterMismatchNoverLmax 0.04 --outFilterMismatchNmax 999 --alignSJDBoverhangMin 1 --alignSJoverhangMin 8 --outFilterMultimapNmax 20 --alignIntronMin 20 --alignIntronMax 1000000 --alignMatesGapMax 1000000 --readFilesIn /fastq/LNCAP_Normoxia_S1_R1_001.fastq.gz --clip3pAdapterSeq GATCGGAAGAGCACACGTCTGAACTCCAGTCAC --outSAMtype BAM SortedByCoordinate --quantMode GeneCounts --outFileNamePrefix LNCAP_Normoxia_S1
+
+The parameters that you should pay attention to are:
+
+--genomeDir, which indicates the directory that contains the genome index files
+--readFilesIn, which specifies the FASTQ file location for sample LNCAP_Normoxia_S1_R1_001.fastq.gz
+--outFileNamePrefix, which specifies the name we want to give the STAR output
