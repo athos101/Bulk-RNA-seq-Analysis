@@ -1,0 +1,28 @@
+fastqc sample_R1.fastq.gz sample_R2.fastq.gz
+
+multiqc .
+
+trimmomatic PE -phred33 \
+   sample_R1.fastq.gz sample_R2.fastq.gz \
+   output_R1_trimmed.fastq.gz output_R1_unpaired.fastq.gz \
+   output_R2_trimmed.fastq.gz output_R2_unpaired.fastq.gz \
+   SLIDINGWINDOW:4:20 MINLEN:50
+
+STAR --runThreadN 8 --genomeDir genome_index \
+     --readFilesIn output_R1_trimmed.fastq.gz output_R2_trimmed.fastq.gz \
+     --readFilesCommand zcat \
+     --outFileNamePrefix sample_
+
+/==========================================
+
+# Yes, that's correct! When using STAR for alignment, you provide R1 and R2 as separate inputs, and STAR generates a single output file that contains the alignment results.
+
+Here’s how it works:
+Input:
+You give R1 and R2 as separate input files (the forward and reverse reads of the paired-end data).
+
+STAR Processes Both Reads:
+STAR aligns both ends of each read pair to the reference genome. It matches the forward read (R1) and reverse read (R2) together, using the information from both ends to improve alignment accuracy.
+
+Output:
+The alignment results are output as a single SAM/BAM file that contains the mapped reads, including information about which reads are paired.
