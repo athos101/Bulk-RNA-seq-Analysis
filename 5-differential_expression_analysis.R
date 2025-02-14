@@ -2,25 +2,38 @@ library("tidyverse")
 library("dplyr")
 library("biomaRt")
 
-process_count_data <- function(path_to_tabular, mart) {
-  count_data <- read.csv(path_to_tabular, sep = "\t")
-  colnames(count_data)[2] <- "Counts"
-  count_data$Status <- "Anti-PDL1"
-  count_data$Tissue <- "Adjacent"
-  count_data <- count_data[, sort(colnames(count_data))]
-  if (substr(count_data$Geneid[1], 1, 4) == "ENSG") {
-    count_data$Geneid <- gsub("\\..*", "", count_data$Geneid)
-    gene_annotations <- getBM(
-      attributes = c("ensembl_gene_id", "external_gene_name", "gene_biotype"),
-      filters = "ensembl_gene_id",
-      values = count_data$Geneid,
-      mart = mart
-    )
-    count_data <- merge(count_data, gene_annotations, by.x = "Geneid", by.y = "ensembl_gene_id", all.x = TRUE)
-    colnames(count_data)[colnames(count_data) == "external_gene_name"] <- "Gene"
+map_status <- function(status){
+  if(status=="ADJ"){
+    return("Adjacent")
+  } else if (status=="TUM"){
+    return("Tumor")
+  }else if (status=="LINFO"){
+    return("Lymph Node")
   }
+}
+
+process_count_data <- function(path_to_tabular, mart, status) {
+  count_data <- read.csv(path_to_tabular, sep = "\t")
+  file_name_info <- strsplit(basename(path_to_tabular),".")
+  colnames(count_data)[2] <- paste("Pul_",file_name_info[1])
+  file_name_info <- strsplit(basename(file_name_info[1]),"_")
+  count_data$Status <- status
+  count_data$Tissue <- map_status(file_name_info[2])
+  count_data <- count_data[, sort(colnames(count_data))]
   return(count_data)
 }
+
+
+count_data$Geneid <- gsub("\\..*", "", count_data$Ensamble_id)
+gene_annotations <- getBM(
+  attributes = c("ensembl_gene_id", "external_gene_name", "gene_biotype"),
+  filters = "ensembl_gene_id",
+  values = count_data$Ensamble_id,
+  mart = mart
+)
+count_data <- merge(count_data, gene_annotations, by.x = "Ensamble_id", by.y = "ensembl_gene_id", all.x = TRUE)
+colnames(count_data)[colnames(count_data) == "external_gene_name"] <- "Gene"
+
 
 ## ACTUAL LOOP HERE
 
@@ -41,7 +54,7 @@ for(subfolder in condition_folders){
   files_in_subfolder <- lapply(subfolder, list.files, full.names=TRUE)
   for(file in files_in_subfolder){
     count_data <- process_count_data(file, mart)
-    sample_name <- basename(file)
+    sample_name <- basename(file) 
   }
 }
 
