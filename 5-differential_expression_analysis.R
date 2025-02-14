@@ -1,51 +1,49 @@
-library("DESeq2")
 library("tidyverse")
-library("org.Hs.eg.db")
 library("dplyr")
+library("biomaRt")
 
-if (!requireNamespace("BiocManager", quietly = TRUE))
-  install.packages("BiocManager")
-
-BiocManager::install("DESeq2")
-
-# READING THE CSV FILES
-count_data <- read.csv("bulk_data/auto_anti_pdl1/58_ADJ.tabular", sep = "\t", row.names="Geneid")
-# RENAMING COUNT COLUMN TO COUNTS
-colnames(count_data)[1] <- "counts"
-# ADDING CONDITION AND TISSUE INFO
-count_data$condition <- "Anti-PDL1"
-count_data$tissue <- "Adjacent"
-# SORTING COLUMNS SO THAT ALL CSV COLUMNS READ WILL BE IN THE SAME ORDER
-count_data <- count_data[,sort(colnames(count_data))]
-head(count_data)
-
-count_data2 <- read.csv("bulk_data/auto_anti_pdl1/58_TUM.tabular", sep = "\t", row.names="Geneid")
-# RENAMING COUNT COLUMN TO COUNTS
-colnames(count_data2)[1] <- "counts"
-# ADDING CONDITION AND TISSUE INFO
-count_data2$condition <- "Anti-PDL1"
-count_data2$tissue <- "Adjacent"
-# SORTING COLUMNS SO THAT ALL CSV COLUMNS READ WILL BE IN THE SAME ORDER
-count_data2 <- count_data2[,sort(colnames(count_data2))]
-head(count_data2)
-# CONVERTING ENSAMBL TO GENE SYMBOL
-if(substr(rownames(count_data2)[1],1,4)=="ENSG"){
-  # CLEAN SUFFIX
-  rownames(count_data2) <- gsub("\\..*", "", rownames(count_data2))
-  head(count_data2)
-  # CONVERT ENSEMBL TO SYMBOL
-  count_data2 <- mapIds(org.Hs.eg.db,keys=count_data2$Ensembl,keytsub(ype = "ENSEMBL",column="SYMBOL"))
+process_count_data <- function(path_to_tabular, mart) {
+  count_data <- read.csv(path_to_tabular, sep = "\t")
+  colnames(count_data)[2] <- "Counts"
+  count_data$Status <- "Anti-PDL1"
+  count_data$Tissue <- "Adjacent"
+  count_data <- count_data[, sort(colnames(count_data))]
+  if (substr(count_data$Geneid[1], 1, 4) == "ENSG") {
+    count_data$Geneid <- gsub("\\..*", "", count_data$Geneid)
+    gene_annotations <- getBM(
+      attributes = c("ensembl_gene_id", "external_gene_name", "gene_biotype"),
+      filters = "ensembl_gene_id",
+      values = count_data$Geneid,
+      mart = mart
+    )
+    count_data <- merge(count_data, gene_annotations, by.x = "Geneid", by.y = "ensembl_gene_id", all.x = TRUE)
+    colnames(count_data)[colnames(count_data) == "external_gene_name"] <- "Gene"
+  }
+  return(count_data)
 }
 
-# 1. Convert from ensembl.gene to gene.symbol
-colnames(count_data2)[1] <- "ensembl"
-count_data2 <- mapIds(org.Hs.eg.db,keys=count_data2$Ensembl,keytsub(ype = "ENSEMBL",column="SYMBOL"))
-?mapIds
+## ACTUAL LOOP HERE
 
+csv_data_folder <- "bulk_data"
+target_path <- file.path(getwd(), csv_data_folder)
 
+if(!dir.exists(target_path)){
+  stop(paste("Folder not found: ", target_path))
+}
 
+condition_folders<-list.dirs(target_path, recursive=FALSE)
 
+# MART - HUMAN GENES FOR ANNOTATION
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 
+for(subfolder in condition_folders){
+  condition <- basename(subfolder)
+  files_in_subfolder <- lapply(subfolder, list.files, full.names=TRUE)
+  for(file in files_in_subfolder){
+    count_data <- process_count_data(file, mart)
+    sample_name <- basename(file)
+  }
+}
 
 
 
