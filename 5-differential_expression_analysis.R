@@ -3,15 +3,33 @@ library("dplyr")
 library("purrr")
 library("biomaRt")
 
+# Lista de valores a serem buscados
+valores <- duplicated_symbols
+
+# Itera sobre cada valor e imprime os índices onde X tem esse valor
+for (valor in valores) {
+  indices <- rownames(count_data)[count_data$Geneid == valor]  # Obtém os índices
+  print(paste0(valor, ": [", paste(indices, collapse = ", "), "]"))
+}
+
 ensambl_to_gene <- function(count_data, mart){
   count_data$Geneid <- gsub("\\..*", "", rownames(count_data))
   duplicated_ids <- any(duplicated(count_data$Geneid))
-
+  
   if(duplicated_ids){
+    cat("There are duplicated gene symbols in the data.\n")
+    # Show the duplicated gene symbols
+    duplicated_symbols <- count_data$Geneid[duplicated(count_data$Geneid)]
+    print(duplicated_symbols)
     count_data <- count_data %>%
       group_by(Geneid) %>% 
       summarise(across(everything(), sum))
+  } else {
+    cat("There are no duplicated gene symbols in the data.\n")
   }
+  
+  count_data <- as.data.frame(count_data)
+  rownames(count_data) <- count_data$Geneid
   
   # RETRIEVE BIOMART DATABASE INFORMATION
   gene_annotations <- getBM(
