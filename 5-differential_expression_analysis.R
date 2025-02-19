@@ -4,7 +4,7 @@ library("purrr")
 library("biomaRt")
 
 ensambl_to_gene <- function(count_data, mart){
-  count_data$Geneid <- gsub("\\..*", "", count_data$Geneid)
+  count_data$Geneid <- gsub("\\..*", "", rownames(count_data))
   duplicated_ids <- any(duplicated(count_data$Geneid))
 
   if(duplicated_ids){
@@ -42,7 +42,7 @@ if(!dir.exists(target_path)){
 condition_folders<-list.dirs(target_path, recursive=FALSE)
 
 # MART - HUMAN GENES FOR ANNOTATION
-mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl", host = "https://useast.ensembl.org") 
 
 merged_counts <- data.frame()
 
@@ -55,10 +55,10 @@ for(subfolder in condition_folders){
     count_data <- read.csv(file, sep = "\t")
     # RENAME THE COUNTS COLUM TO THE NAME OF THE SAMPLE
     file_name_info <- strsplit(basename(file),"\\.")
-    colnames(count_data)[2] <- paste("Pul_",file_name_info[[1]][1])
+    file_name_info <- paste("Pul_",file_name_info[[1]][1],"_",condition)
+    colnames(count_data)[2] <- file_name_info
     rownames(count_data)<-count_data$Geneid
-    # WE SORT THE COLUMNS TO FURTHER MERGE THEM
-    count_data <- count_data[, sort(colnames(count_data))]
+    count_data<-subset(count_data, select = -c(Geneid))
     if(dim(merged_counts)[1]==0){
       merged_counts<-count_data
     }else{
@@ -67,7 +67,8 @@ for(subfolder in condition_folders){
   }
 }
 
-merged_counts <- ensambl_to_gene(count_data, mart)
+merged_counts <- ensambl_to_gene(merged_counts, mart)
+
 
 
 
