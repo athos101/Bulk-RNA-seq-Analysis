@@ -87,6 +87,39 @@ for(subfolder in condition_folders){
 
 merged_counts <- ensambl_to_gene(merged_counts, mart)
 
+## CODE OF WILCOXON + EDGER TMM
+library(edgeR)
 
+# read data
+readCount <- read.table(file = "examples/examples.countMatrix.tsv", header = T, row.names = 1, stringsAsFactors = F, check.names = F)
+conditions <- read.table(file = "examples/examples.conditions.tsv", header = F)
+conditions <- factor(t(conditions))
+# edgeR TMM normalize
+y <- DGEList(counts = readCount, group = conditions)
+## Remove rows conssitently have zero or very low counts
+keep <- filterByExpr(y)
+y <- y[keep, keep.lib.sizes = FALSE]
+## Perform TMM normalization and convert to CPM (Counts Per Million)
+y <- calcNormFactors(y, method = "TMM")
+count_norm <- cpm(y)
+count_norm <- as.data.frame(count_norm)
+# Run the Wilcoxon rank-sum test for each gene
+pvalues <- sapply(1:nrow(count_norm), function(i){
+  data <- cbind.data.frame(gene = as.numeric(t(count_norm[i,])), conditions)
+  p <- wilcox.test(gene~conditions, data)$p.value
+  return(p)
+})
+fdr <- p.adjust(pvalues, method = "fdr")
+# Calculate the fold-change for each gene
+conditionsLevel <- levels(conditions)
+dataCon1 <- count_norm[,c(which(conditions==conditionsLevel[1]))]
+dataCon2 <- count_norm[,c(which(conditions==conditionsLevel[2]))]
+foldChanges <- log2(rowMeans(dataCon2)/rowMeans(dataCon1))
+# Output results based on the FDR threshold 0.05
+outRst <- data.frame(log2foldChange = foldChanges, pValues = pvalues, FDR = fdr)
+rownames(outRst) <- rownames(count_norm)
+outRst <- na.omit(outRst)
+fdrThres <- 0.05
+write.table(outRst[outRst$FDR<fdrThres,], file = "examples/examples.WilcoxonTest.rst.tsv", sep="\t", quote = F, row.names = T, col.names = T)
 
 
