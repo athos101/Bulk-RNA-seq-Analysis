@@ -2,8 +2,8 @@
 
 * [What new features does this pipeline introduce?](#what-new-features-does-this-pipeline-introduce)
 * [Getting data from GEO](#getting-data-from-geo)
-* Trimming adapters with Cutadapt
-* Mapping reads with STAR
+* [Trimming adapters with Cutadapt](#trimming-adapters-with-cutadapt)
+* [Mapping reads with STAR](#mapping-reads-with-star)
   * Building a genome index
   * Align the FASTQ with the genome index
 * Differential Expression Analysis
@@ -29,12 +29,46 @@ With the bash script "1-download_sra.sh", we can call It in command line using a
 
 First of all, we can check the qulity of the FASTQ files with fastqc. It can be run with:
 
-`fastqc --noextract --nogroup -o fastqc *.fastq.gz`
+* `fastqc --noextract --nogroup -o fastqc *.fastq.gz`
 
 Then, we can run cutadapt to trim adapter sequences and increase the quality of our data, with this template:
 
-`cutadapt -a ADAPTER_SEQUENCE -A ADAPTER_SEQUENCE_R2 -o trimmed_R1.fastq -p trimmed_R2.fastq R1.fastq R2.fastq`
+* `cutadapt -a ADAPTER_SEQUENCE -A ADAPTER_SEQUENCE_R2 -o trimmed_R1.fastq -p trimmed_R2.fastq R1.fastq R2.fastq`
 
 For sanger data, for example, we use the following adapter sequences.:
 
-`cutadapt -a TGTAAAACGACGGCCAGT -A CAGGAAACAGCTATGAC -o trimmed_R1.fastq -p trimmed_R2.fastq R1.fastq R2.fastq`
+* `cutadapt -a TGTAAAACGACGGCCAGT -A CAGGAAACAGCTATGAC -o trimmed_R1.fastq -p trimmed_R2.fastq R1.fastq R2.fastq`
+
+### Mapping reads with STAR
+
+We align the reads with STAR with two steps:
+
+**Step 1: building the genome index**
+
+First, we generate a genome index. We can do It with the following command:
+
+* `STAR --runThreadN 16 --runMode genomeGenerate --genomeDir {genome_directory} --genomeFastaFiles {genome_directory}/Homo_sapiens.GRCh38.dna_sm.primary_assembly.fa --sjdbGTFfile {genome_directory}/Homo_sapiens.GRCh38.113.gtf`
+
+In the genome_directory, we will need tow files:
+
+* A gene transfer format (.gtf) file of the genome of interest. A version for the human genome GRCh38 can be found [here](https://ftp.ensembl.org/pub/release-113/gtf/homo_sapiens/). It specifies locations of exons, introns, coding sequences and other regions of the genome.
+* A primary assembly FASTQ file of all the genome chormossomes. A version for the human genome GRCh38 can be found [here](https://ftp.ensembl.org/pub/release-113/fasta/homo_sapiens/dna/).
+
+The way we set the folders was:
+
+bulk_data/
+
+* Genome/
+  * [The 2 genome files mentioned + the generated indexes]
+* Trimmed/
+  * [trimmed bulk RNA-seq fastq files that we will analyze]
+
+**Step 2: FASTQ sequences alignment to the genome**
+
+We then run the alignment in the following format:
+
+* `STAR --runThreadN 16 \ --genomeDir /path/to/genome_index \ --readFilesIn /path/to/fastq/sample_R1.fastq.gz /path/to/fastq/sample_R2.fastq.gz \ --outFileNamePrefix /path/to/output/sample_ \ --outSAMtype BAM SortedByCoordinate \ --quantMode GeneCounts \ --readFilesCommand zcat`
+
+In the file [2-running_star.py](/2-running_star.py), we execute this command for every fastq in the "bulk_data" folder, in which we stored the fastq files and the genome.
+
+=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- TO BE CONTINUED =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
