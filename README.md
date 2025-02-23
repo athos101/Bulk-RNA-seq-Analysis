@@ -1,7 +1,7 @@
 # Bluk RNA-seq pipeline: from fastq processing to differential gene expression analysis
 
-* What new features does this pipeline introduce?
-* Getting data from GEO
+* [What new features does this pipeline introduce?](#what-new-features-does-this-pipeline-introduce)
+* [Getting data from GEO](#getting-data-from-geo)
 * Trimming adapters with Cutadapt
 * Mapping reads with STAR
   * Building a genome index
