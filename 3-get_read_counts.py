@@ -3,13 +3,15 @@ import csv
 
 # modify desired_column based on strandedness of library kit (index 3 is column 4)
 desired_column = 3
-output_directory = "STAR_output/"
+output_directory = "bulk_data/control/counts/"
 sample_dict = {}
 sample_names = []
 
 # loop through each folder and store data from ReadsPerGene.out.tab in sample_dict
 for folder in os.listdir(output_directory):
+    print("imhere")	
     if folder.endswith("_output"):
+        print("cheguei")
         file_name=folder.strip('_output')
         sample_names.append(file_name)
         gene_dict = {}
@@ -23,7 +25,7 @@ for folder in os.listdir(output_directory):
 
 # write sample_dict to output files
 # the qc metrics are stored in qc.csv, and the gene counts are stored in raw_counts.csv
-with open("raw_counts.csv", "wt") as counts_file, open("qc.csv", "wt") as qc_file:
+with open(f"raw_counts.csv", "wt") as counts_file, open("qc.csv", "wt") as qc_file:
     counts_writer = csv.writer(counts_file)
     qc_writer = csv.writer(qc_file)
     counts_writer.writerow( ['ensembl_id']+ sample_names )
