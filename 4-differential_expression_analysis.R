@@ -128,7 +128,7 @@ for (valor in valores) {
 merged_bulks[is.na(merged_bulks)] <- 0
 
 saveRDS(merged_bulks, file = 'bulk_data/merged_bulks_clean.rds')
-readCount <- readRDS(file = "merged_bulks_clean.rds")
+readCount <- readRDS(file = "bulk_data/merged_bulks_clean.rds")
 
 ## REPRODUCING THE WILCOXON + EDGER TMM
 
@@ -141,6 +141,8 @@ get_condition <- function(string){
     return("LymphNode")
 }
 
+# Here, we create the conditions for our Wilcoxom runk sum,
+# which contains for each sample the conditions to be compared.
 conditions <- data.frame(1)
 for(col in colnames(readCount)){
   #conditions[col] <- get_condition(col)
@@ -150,13 +152,6 @@ conditions <- conditions[2:(length(colnames(readCount))+1)]
 conditions <- factor(t(conditions))
 
 ## CODE OF WILCOXON + EDGER TMM
-
-# Read count matrix: genes for rows and samples for clumns.
-readCount <- read.table(file = "examples/examples.countMatrix.tsv", header = T, row.names = 1, stringsAsFactors = F, check.names = F)
-# Conditions is a single row with the condition labels for each sample present in the read count matrix.
-conditions <- read.table(file = "examples/examples.conditions.tsv", header = F)
-conditions <- factor(t(conditions))
-
 generate_wilcoxon_table <- function(readCount, conditions){
   # edgeR TMM normalize
   y <- DGEList(counts = readCount, group = conditions)
@@ -187,6 +182,56 @@ generate_wilcoxon_table <- function(readCount, conditions){
   outRst <- na.omit(outRst)
   fdrThres <- 0.05
   write.table(outRst[outRst$FDR<fdrThres,], file = "WilcoxonTest_Clinical.rst.tsv", sep="\t", quote = F, row.names = T, col.names = T)
+  return(outRst[outRst$FDR<fdrThres])
 }
+
+# GENE SET VARIATION ANALYSIS
+library(GSVA)
+
+# LOAD FUNCTIONAL GENE EXPRESSION SIGNATURES
+fges <- readRDS('E:/aula tumores/FGES_list.rds')
+fges <- fges[1:27]
+
+#Perform log-CPM normalization with edgeR
+bulkdata <- cpm(as.matrix(counts_matrix_cleaned2), log = T)
+#Convert matrix to ExpressionSet
+bulkdata <- ExpressionSet(assayData = bulkdata)
+
+#Run GSVA
+#Gaussian for log CPM normalization, if raw counts provided used "Poisson"
+bulkPar <- gsvaParam(bulkdata, fges, maxDiff=FALSE, kcdf = "Gaussian")
+bulk_es <- gsva(bulkPar)
+
+#Plot Heatmap
+hmcol <- colorRampPalette(brewer.pal(10, "RdBu"))(256)
+hmcol <- hmcol[length(hmcol):1]
+pheatmap(exprs(bulk_es), col = hmcol, scale = "row",
+         cluster_cols = T, cluster_rows = T,
+         clustering_method = "ward.D2", angle_col = "45")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
