@@ -1,9 +1,7 @@
 library("tidyverse")
-library("dplyr")
 library("purrr")
 library("biomaRt")
 library("org.Hs.eg.db")
-library("edgeR")
 
 remove_ensambl_suffix <- function(count_data){
   count_data$Geneid <- gsub("\\..*", "", rownames(count_data))
@@ -129,109 +127,3 @@ merged_bulks[is.na(merged_bulks)] <- 0
 
 saveRDS(merged_bulks, file = 'bulk_data/merged_bulks_clean.rds')
 readCount <- readRDS(file = "bulk_data/merged_bulks_clean.rds")
-
-## REPRODUCING THE WILCOXON + EDGER TMM
-
-get_condition <- function(string){
-  if(grepl("ADJ",string, fixed = TRUE))
-    return("Adjacent")
-  if(grepl("TUM",string, fixed = TRUE))
-    return("Tumor")
-  if(grepl("LINFO",string, fixed = TRUE))
-    return("LymphNode")
-}
-
-# Here, we create the conditions for our Wilcoxom runk sum,
-# which contains for each sample the conditions to be compared.
-conditions <- data.frame(1)
-for(col in colnames(readCount)){
-  #conditions[col] <- get_condition(col)
-  conditions[col] <- str_split(col, "_")[[1]][3]
-}
-conditions <- conditions[2:(length(colnames(readCount))+1)]
-conditions <- factor(t(conditions))
-
-## CODE OF WILCOXON + EDGER TMM
-generate_wilcoxon_table <- function(readCount, conditions){
-  # edgeR TMM normalize
-  y <- DGEList(counts = readCount, group = conditions)
-  ## Remove rows conssitently have zero or very low counts
-  keep <- filterByExpr(y)
-  y <- y[keep, keep.lib.sizes = FALSE]
-  ## Perform TMM normalization and convert to CPM (Counts Per Million)
-  y <- calcNormFactors(y, method = "TMM")
-  count_norm <- cpm(y)
-  count_norm <- as.data.frame(count_norm)
-  # Run the Wilcoxon rank-sum test for each gene
-  pvalues <- sapply(1:nrow(count_norm), function(i){
-    data <- cbind.data.frame(gene = as.numeric(t(count_norm[i,])), conditions)
-    p <- wilcox.test(gene~conditions, data)$p.value
-    return(p)
-  })
-  fdr <- p.adjust(pvalues, method = "fdr")
-  # Calculate the fold-change for each gene
-  conditionsLevel <- levels(conditions)
-  dataCon1 <- count_norm[,c(which(conditions==conditionsLevel[1]))]
-  dataCon2 <- count_norm[,c(which(conditions==conditionsLevel[2]))]
-  
-  # IF >0, IT IS MORE EXPRESSED IN DATACON2. ELSE, IT IS MORE EXPRESSED IN DATACON1. 
-  foldChanges <- log2(rowMeans(dataCon1)/rowMeans(dataCon2))
-  # Output results based on the FDR threshold 0.05
-  outRst <- data.frame(log2foldChange = foldChanges, pValues = pvalues, FDR = fdr)
-  rownames(outRst) <- rownames(count_norm)
-  outRst <- na.omit(outRst)
-  fdrThres <- 0.05
-  write.table(outRst[outRst$FDR<fdrThres,], file = "WilcoxonTest_Clinical.rst.tsv", sep="\t", quote = F, row.names = T, col.names = T)
-  return(outRst[outRst$FDR<fdrThres])
-}
-
-# GENE SET VARIATION ANALYSIS
-library(GSVA)
-
-# LOAD FUNCTIONAL GENE EXPRESSION SIGNATURES
-fges <- readRDS('E:/aula tumores/FGES_list.rds')
-fges <- fges[1:27]
-
-#Perform log-CPM normalization with edgeR
-bulkdata <- cpm(as.matrix(counts_matrix_cleaned2), log = T)
-#Convert matrix to ExpressionSet
-bulkdata <- ExpressionSet(assayData = bulkdata)
-
-#Run GSVA
-#Gaussian for log CPM normalization, if raw counts provided used "Poisson"
-bulkPar <- gsvaParam(bulkdata, fges, maxDiff=FALSE, kcdf = "Gaussian")
-bulk_es <- gsva(bulkPar)
-
-#Plot Heatmap
-hmcol <- colorRampPalette(brewer.pal(10, "RdBu"))(256)
-hmcol <- hmcol[length(hmcol):1]
-pheatmap(exprs(bulk_es), col = hmcol, scale = "row",
-         cluster_cols = T, cluster_rows = T,
-         clustering_method = "ward.D2", angle_col = "45")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
