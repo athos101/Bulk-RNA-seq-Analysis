@@ -8,7 +8,6 @@
 library(BisqueRNA)
 library(SeuratObject)
 library(ggplot2)
-library(DeconvoBuddies)
 library(tidyverse)
 library(pheatmap)
 library(dplyr)
