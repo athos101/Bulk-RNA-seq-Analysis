@@ -14,16 +14,16 @@ library(pheatmap)
 library(dplyr)
 library(readr)
 library(Matrix)
-library(DeconvoBuddies)
+library(SingleCellExperiment)
 
 ## STEP 2: LOAD DATA
 #//=======================================================================//
-
+# LUAD
 bulkdata <- readRDS('bulk_data/merged_bulks_clean.rds')
 bulkdata <- as.matrix(bulkdata)
 bulk.eset <- ExpressionSet(assayData = bulkdata)
 rm(bulkdata)
-sobj <- readRDS(file = '../R_Datasets/LUSC_subset_raw.rds')
+sobj <- readRDS(file = '/media/usuario/hd6tb/raw_datasets/LUAD_raw.rds')
 
 
 ## STEP 3: FILTERING MARKERS WITH MEANRATIO
@@ -70,15 +70,39 @@ plot_gene_express(
 
 plot_marker_express(
   sce = sce,
-  stats = marker_stats,
+  stats = marker_stats_MeanRatio,
   cell_type = "Excit",
   n_genes = 10,
   cellType_col = "cellType_broad_hc"
 )
 
+## STEP 4: CLEANING THE SC RNA SEQ DATA
+#//=======================================================================//
 
+sobj <- sobj[, colData(sobj)$cell_type != "Remove"]
+ct_tab <- table(sobj$cell_type)
+my_cell_types <- names(ct_tab[ct_tab > 50])
+sobj <- sobj[,sobj$cell_type %in% my_cell_type]
 
+## STEP 5: OBTAINING THE REPRESENTATIVE GENES OF EACH CELL TYPE
+#//=======================================================================//
+gene_sums <- rowSums(logcounts(sobj))
+top_gene <- gene_sums > median(gene_sums)
+sobj <- sobj[top_gene,]
+marker_stats <- get_mean_ratio2(sobj, cellType_col = "cellType_broad")
+marker_stats
 
+DeconvoBuddies::plot_marker_express(sobj,
+                                    stats = marker_stats, 
+                                    cell_type = 'MYCELLTYPE', 
+                                    cellType_col = "cell_type", 
+                                    n_genes = 10, 
+                                    rank_col = "rank_ratio",
+                                    anno_col = "anno_ratio",
+)
+
+DeconvoBuddies::plot_gene_express(sobj,
+                                  genes = c("MYGENE1","MYGENE2"))
 
 
 
