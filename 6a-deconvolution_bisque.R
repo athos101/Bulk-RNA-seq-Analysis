@@ -26,11 +26,19 @@ bulk.eset <- ExpressionSet(assayData = bulkdata)
 rm(bulkdata)
 sobj <- readRDS(file = '/mnt/hd6tb/athos_hub/rds_data/atlas_clean.rds')
 
+# ADDING CD4 MARKERS (TEMP)
+genes <- rownames(sobj)
+genes <- append(genes, c("IFNG","IL21","BCL6","ODC1","PYCR1","TNF","IFI6","IL4R",
+                         "IL17C","IL17D"))
+genes <- unique(genes)
+sobj<-subset(raw_sobj, features=genes)
+
 ## STEP 3: FILTERING MARKERS WITH MEANRATIO
 #//=======================================================================//
 # First, we clean and prepare the data.
 sobj <- SetIdent(sobj, value=sobj$celltype)
 sobj <- subset(sobj, idents=c("Remove"), invert=TRUE)
+#sobj<-NormalizeData(sobj)
 #sobj <- NormalizeData(sobj, normalization.method = "LogNormalize", scale.factor = 10000)
 
 sce <- as.SingleCellExperiment(sobj)
@@ -41,12 +49,12 @@ assay(sce, "logcounts") <- log1p(assay(sce, "counts"))
 
 marker_stats_MeanRatio <- get_mean_ratio(
   sce = sce, # sce is the SingleCellExperiment with our data
-  assay_name = "logcounts", ## assay to use, we recommend logcounts [default]
+  assay_name = "counts", ## assay to use, we recommend logcounts [default]
   cellType_col = "celltype", # column in colData with cell type info
 )
 
 marker_stats_MeanRatio |>
-  filter(MeanRatio.rank == 2)
+  filter(MeanRatio.rank == 1)
 
 # AND FINALLY, WE VERIFY THE GENES SELECTED
 
@@ -59,20 +67,12 @@ plot_gene_express(
 plot_marker_express(
   sce = sce,
   stats = marker_stats_MeanRatio,
-  cell_type = "Excit",
+  cell_type = "TCD4",
   n_genes = 10,
-  cellType_col = "cellType.target"
+  cellType_col = "celltype"
 )
 
-## STEP 4: CLEANING THE SC RNA SEQ DATA
-#//=======================================================================//
-
-sobj <- sobj[, colData(sobj)$cell_type != "Remove"]
-ct_tab <- table(sobj$cell_type)
-my_cell_types <- names(ct_tab[ct_tab > 50])
-sobj <- sobj[,sobj$cell_type %in% my_cell_type]
-
-## STEP 5: OBTAINING THE REPRESENTATIVE GENES OF EACH CELL TYPE
+## STEP 4: OBTAINING THE REPRESENTATIVE GENES OF EACH CELL TYPE
 #//=======================================================================//
 gene_sums <- rowSums(logcounts(sce))
 top_gene <- gene_sums > median(gene_sums)
@@ -113,28 +113,11 @@ sc.eset <- ExpressionSet(assayData = as.matrix(sc_counts), phenoData = sc_annot)
 
 #//=======================================================================//
 
-sc.eset <- Biobase::ExpressionSet(assayData = as.matrix(assays(sce.dlpfc.tran[marker_genes,])$counts),
-                                      phenoData=AnnotatedDataFrame(
-                                        as.data.frame(colData(sce.dlpfc.tran))[,c("cellType_broad","donor")]))
-
-##check for nuclei with 0 marker expression
-zero_cell_filter <- colSums(exprs(exp_set_sce)) != 0
-message("Exclude ",sum(!zero_cell_filter), " cells")
-
-#//=======================================================================//
-
 res <- BisqueRNA::ReferenceBasedDecomposition(bulk.eset, sc.eset, markers=NULL, use.overlap=FALSE)
 bisque_results <- as.data.frame(res$bulk.props)
 bisque_results <- t(bisque_results)
 
 #//=======================================================================//
-
-est_prop <- ReferenceBasedDecomposition(bulk.eset = exp_set_bulk,
-                                        sc.eset = exp_set_sce,
-                                        cell.types = "cellType_broad",
-                                        subject.names = "donor",
-                                        use.overlap = FALSE)
-
 
 
 
