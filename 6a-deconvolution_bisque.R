@@ -13,7 +13,6 @@ library(tidyverse)
 library(pheatmap)
 library(dplyr)
 library(readr)
-library(Matrix)
 library(SingleCellExperiment)
 library(DeconvoBuddies)
 
@@ -26,25 +25,19 @@ bulk.eset <- ExpressionSet(assayData = bulkdata)
 rm(bulkdata)
 sobj <- readRDS(file = '/mnt/hd6tb/athos_hub/rds_data/atlas_clean.rds')
 
-# ADDING CD4 MARKERS (TEMP)
-genes <- rownames(sobj)
-genes <- append(genes, c("IFNG","IL21","BCL6","ODC1","PYCR1","TNF","IFI6","IL4R",
-                         "IL17C","IL17D"))
-genes <- unique(genes)
-sobj<-subset(raw_sobj, features=genes)
-
 ## STEP 3: FILTERING MARKERS WITH MEANRATIO
 #//=======================================================================//
 # First, we clean and prepare the data.
 sobj <- SetIdent(sobj, value=sobj$celltype)
 sobj <- subset(sobj, idents=c("Remove"), invert=TRUE)
-#sobj<-NormalizeData(sobj)
-#sobj <- NormalizeData(sobj, normalization.method = "LogNormalize", scale.factor = 10000)
 
 sce <- as.SingleCellExperiment(sobj)
 colData(sce) <- DataFrame(sobj@meta.data)
 rowData(sce) <- rownames(sobj)
+# ONLY IF THE MATRIX IS RAW!
 assay(sce, "logcounts") <- log1p(assay(sce, "counts"))
+# IF IT IS ALREADY NORMALIZED
+assay(sce, "logcounts") <- assay(sce,"counts")
 # THEN WE DO THE MEAN RATIO
 
 marker_stats_MeanRatio <- get_mean_ratio(
@@ -72,36 +65,12 @@ plot_marker_express(
   cellType_col = "celltype"
 )
 
-## STEP 4: OBTAINING THE REPRESENTATIVE GENES OF EACH CELL TYPE
-#//=======================================================================//
-gene_sums <- rowSums(logcounts(sce))
-top_gene <- gene_sums > median(gene_sums)
-sce <- sce[top_gene,]
-marker_stats <- get_mean_ratio(sce, cellType_col = "celltype")
-marker_stats
-
-DeconvoBuddies::plot_marker_express(sce,
-                                    stats = marker_stats, 
-                                    cell_type = 'TCD4', 
-                                    cellType_col = "celltype", 
-                                    n_genes = 10, 
-                                    rank_col = "MeanRatio.rank",
-                                    anno_col = "MeanRatio.anno",
-)
-
-DeconvoBuddies::plot_gene_express(sce,
-                                  genes = c("LEPROTL1","RGCC"), category = "celltype")
-
-## STEP 6: PREPARING SINGLE-CELL COUNTS
+## STEP 4: FILTERING BOTH BULK AND SINGLE-CELL WITH THE MARKERS
 #//=======================================================================//
 rownames(bulk.eset) <- rowData(bulk.eset)$Symbol
-
 marker_genes <- marker_stats |>
   filter(MeanRatio.rank <= 25, gene %in% rownames(bulk.eset)) |>
   pull(gene)
-
-length(marker_genes)
-
 sc_counts <- GetAssayData(sobj[marker_genes,], layer = "counts")
 cellmeta <- sobj@meta.data
 celltype <- cellmeta[,c("celltype", "patient")]

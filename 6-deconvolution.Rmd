@@ -1,0 +1,183 @@
+---
+title: "Deconvolution pipeline using the Bisque method"
+output: html_notebook
+---
+
+This pipeline guides the deconvolution process of bulk RNA sequencing data, from preparing the bulk and single-cell reference to plotting the cell type proportions
+
+### Step 1: libraries needed
+
+```{r}
+library(BisqueRNA)
+library(Seurat)
+library(SeuratObject)
+library(ggplot2)
+library(tidyverse)
+library(pheatmap)
+library(dplyr)
+library(readr)
+library(SingleCellExperiment)
+library(DeconvoBuddies)
+```
+
+## Step 2: loading datasets
+
+Bulk:
+
+```{r}
+bulkdata <- readRDS('bulk_data/merged_bulks_clean.rds')
+bulkdata <- as.matrix(bulkdata)
+bulk.eset <- ExpressionSet(assayData = bulkdata)
+rm(bulkdata)
+```
+
+Single-cell:
+
+```{r}
+sobj <- readRDS(file = '/mnt/hd6tb/athos_hub/rds_data/atlas_clean.rds')
+```
+
+## Step 3: filtering markers with MeanRatio
+
+First, we remove undesirable data and then, we create a singleCellExperiment from our Seurat.
+
+```{r}
+sobj <- SetIdent(sobj, value=sobj$celltype)
+sobj <- subset(sobj, idents=c("Remove"), invert=TRUE)
+sce <- as.SingleCellExperiment(sobj)
+colData(sce) <- DataFrame(sobj@meta.data)
+rowData(sce) <- rownames(sobj)
+```
+
+If the data isn't normalized, we use the first line. Some datasets were loaded from Scanpy environment. That means the "counts" layer are already normalized. In this specific case, we run the second line instead.
+
+```{r}
+#assay(sce, "logcounts") <- log1p(assay(sce, "counts"))
+assay(sce, "logcounts") <- assay(sce,"counts")
+```
+
+Run MeanRatio:
+
+```{r}
+marker_stats_MeanRatio <- get_mean_ratio(
+  sce = sce, # sce is the SingleCellExperiment with our data
+  assay_name = "counts", ## assay to use, we recommend logcounts [default]
+  cellType_col = "celltype", # column in colData with cell type info
+)
+
+marker_stats_MeanRatio |>
+  filter(MeanRatio.rank == 1)
+```
+
+Assessing the result:
+
+```{r}
+plot_gene_express(
+  sce = sce,
+  category = "celltype",
+  genes = c("KLF6","CD52")
+)
+
+plot_marker_express(
+  sce = sce,
+  stats = marker_stats_MeanRatio,
+  cell_type = "TCD4",
+  n_genes = 10,
+  cellType_col = "celltype"
+)
+```
+
+We then filter out the marker genes in bulk and single-cell Seurat. For the deconvolution we go back using the Seurat for the single-cell reference, in a way that the SingleCellExperiment is used only to obtain marker genes with the MeanRatio function.
+
+```{r}
+marker_genes <- marker_stats_MeanRatio |>
+  filter(MeanRatio.rank <= 25, gene %in% rownames(bulk.eset)) |>
+  pull(gene)
+sc_counts <- GetAssayData(sobj[marker_genes,], layer = "counts")
+```
+
+## Step 4: Running Bisque deconvolution:
+
+```{r}
+cellmeta <- sobj@meta.data
+celltype <- cellmeta[,c("celltype", "patient")]
+colnames(celltype) <- c("cellType", "SubjectName")
+df <- data.frame(labelDescription=colnames(celltype), row.names = colnames(celltype))
+sc_annot <- new("AnnotatedDataFrame", data=celltype, varMetadata=df)
+sc.eset <- ExpressionSet(assayData = as.matrix(sc_counts), phenoData = sc_annot)
+
+res <- BisqueRNA::ReferenceBasedDecomposition(bulk.eset, sc.eset, markers=NULL, use.overlap=FALSE)
+bisque_results <- res$bulk.props |> as.data.frame() |> t()
+```
+
+## Step 5: Plotting the cell type composition for the bulks:
+
+```{r}
+
+```
+
+## Extra 1: Running pseudobulk for method evaluation.
+
+Prepare single-cell proportions
+
+```{r}
+sc_counts <- GetAssayData(sobj[marker_genes,], layer = "counts")
+cellmeta <- sobj@meta.data
+celltype <- cellmeta[,c("celltype", "patient")]
+colnames(celltype) <- c("cellType", "SubjectName")
+df <- data.frame(labelDescription=colnames(celltype), row.names = colnames(celltype))
+sc_annot <- new("AnnotatedDataFrame", data=celltype, varMetadata=df)
+sc.eset <- ExpressionSet(assayData = as.matrix(sc_counts), phenoData = sc_annot)
+```
+
+Creating pseudobulk
+
+```{r}
+sobj <- SetIdent(sobj, value = sobj$sample)
+matAvgMatchingPseudoBulk <- Seurat::AverageExpression(sobj[marker_genes,], assays = "RNA", slot = "counts", return.seurat = F)
+matAvgMatchingPseudoBulk <- as.data.frame(t(matAvgMatchingPseudoBulk[["RNA"]]))
+matAvgMatchingPseudoBulk <- as.matrix(t(matAvgMatchingPseudoBulk))
+bulk.eset <- ExpressionSet(assayData = matAvgMatchingPseudoBulk)
+pseudobulk <- BisqueRNA::ReferenceBasedDecomposition(bulk.eset, sc.eset, markers=NULL, use.overlap=FALSE)
+pseudobulk_props <- pseudobulk$bulk.props |> as.data.frame() |> t()
+```
+
+We then make a correlation to evaluate how far away from the real data the prediction is:
+
+```{r}
+meta_data <- sobj@meta.data
+table_freq <- table(meta_data$sample, meta_data$celltype)
+table_props <- prop.table(table_freq, margin=1)
+sc_props <- as.data.frame.matrix(table_props)
+sc_props$sample <- rownames(sc_props)
+sc_props <- sc_props[, !names(sc_props) %in% "sample"]
+
+sc_props <- t(sc_props)
+pseudobulk_props <- t(pseudobulk_props)
+colnames(pseudobulk_props) <- gsub("-", "_", colnames(pseudobulk_props))
+
+merged_df <- merge(pseudobulk_props, sc_props, by = "row.names", suffixes = c("PB", "SC"))
+rownames(merged_df) <- merged_df$Row.names
+merged_df <- merged_df[, -1]
+
+spearman_corr <- apply(merged_df, 1, function(row) {
+  method1_values <- row[grep("PB", names(row))]
+  method2_values <- row[grep("SC", names(row))]
+  cor(method1_values, method2_values, method = "spearman")
+})
+
+head(spearman_corr)
+corr_df <- data.frame(
+  Cell_Type = names(spearman_corr),
+  Spearman_Correlation = spearman_corr
+)
+
+ggplot(corr_df, aes(x = reorder(Cell_Type, Spearman_Correlation), y = Spearman_Correlation)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +  # Flip the coordinates for better readability
+  labs(title = "Spearman Correlation of Cell Type Proportions",
+       x = "Cell Type",
+       y = "Spearman_Correlation") +
+theme_minimal()
+
+```
