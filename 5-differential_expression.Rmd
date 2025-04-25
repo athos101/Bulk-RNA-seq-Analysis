@@ -10,6 +10,10 @@ date: "2025-04-24"
 library("tidyverse")
 library("edgeR")
 library("DESeq2") # If using Deseq2
+library("GSVA")
+library("pheatmap")
+library("SingleCellExperiment")
+library("RColorBrewer")
 readCount <- readRDS(file = "bulk_data/merged_bulks_clean.rds")
 ```
 
@@ -221,7 +225,7 @@ bulkdata <- cpm(as.matrix(readCount), log = T)
 bulkdata <- ExpressionSet(assayData = bulkdata)
 
 #Gaussian for log CPM normalization, if raw counts provided used "Poisson"
-bulkPar <- gsvaParam(bulkdata, fges, maxDiff=FALSE, kcdf = "Gaussian")
+bulkPar <- gsvaParam(bulkdata, gene_sets, maxDiff=FALSE, kcdf = "Gaussian")
 bulk_es <- gsva(bulkPar)
 
 #Plot Heatmap
