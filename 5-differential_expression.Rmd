@@ -207,13 +207,19 @@ ggplot(gene_tib, aes(x = condition, y = expression))+
 
 ### Gene Set Expression Analysis
 
+Reading our function gene expression signatures:
+
 ```{r}
-#Perform log-CPM normalization with edgeR
-bulkdata <- cpm(as.matrix(counts_matrix_cleaned2), log = T)
-#Convert matrix to ExpressionSet
+fges <- read.csv('bulk_data/FGES_29.csv')
+gene_sets <- split(fges$Gene, fges$Gene.signature)
+```
+
+Running GSVA with our fges:
+
+```{r}
+bulkdata <- cpm(as.matrix(readCount), log = T)
 bulkdata <- ExpressionSet(assayData = bulkdata)
 
-#Run GSVA
 #Gaussian for log CPM normalization, if raw counts provided used "Poisson"
 bulkPar <- gsvaParam(bulkdata, fges, maxDiff=FALSE, kcdf = "Gaussian")
 bulk_es <- gsva(bulkPar)
