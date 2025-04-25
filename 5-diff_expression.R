@@ -1,7 +1,10 @@
 library("tidyverse")
 library("edgeR")
+library("GSVA")
+library("SingleCellExperiment")
+library("RColorBrewer")
 
-readCount <- readRDS(file = "bulk_data/merged_bulks_clean.rds")
+bulkdata <- readRDS(file = "bulk_data/merged_bulks_clean.rds")
 
 ## REPRODUCING THE WILCOXON + EDGER TMM
 
@@ -95,7 +98,7 @@ write.table(wilcox_tum, file = "WCX_tum_rst.tsv", sep="\t", quote = F, row.names
 # //-=/-=/-=/-=/-=/-=/-=/ DESEQ2 \=-\=-\=-\=-\=-\=-\=-\=-\=-\=-||
 library("DESeq2")
 # identify biological replicates
-deseq_conditions <- lapply(colnames(readCount), function(name){
+deseq_conditions <- lapply(colnames(bulkdata), function(name){
   pieces <- str_split(name, "_")
   name <- paste(pieces[[1]][2], pieces[[1]][3], sep="_")
   return(name)
@@ -104,11 +107,12 @@ deseq_conditions <- lapply(colnames(readCount), function(name){
 # assign replicates to each sample name to construct colData
 my_colData <- as.data.frame(deseq_conditions)
 my_colData <- t(my_colData)
-rownames(my_colData) <- colnames(readCount)
+rownames(my_colData) <- colnames(bulkdata)
 colnames(my_colData)[1] <- "deseq_conditions"
-deseq_conditions <- as.factors(deseq_conditions)
+deseq_conditions <- unlist(deseq_conditions)
+deseq_conditions <- as.factor(deseq_conditions)
 
-dds <- DESeqDataSetFromMatrix(countData = readCount,
+dds <- DESeqDataSetFromMatrix(countData = bulkdata,
                               colData = my_colData,
                               design = ~deseq_conditions)
 
@@ -200,10 +204,11 @@ ig_genes <- rownames(dds)[grep("^IGHA", rownames(dds))]
 # Print the gene names
 print(ig_genes)
 
-gene <- "IGHA1"
+gene <- "IGHG4"
 
 normalized_data <- counts(dds, normalized = T)
 expression <- normalized_data[gene,]
+#condition <- rownames(dds@colData)
 condition <- dds@colData$deseq_conditions
 gene_tib <- tibble(condition = condition, expression = expression)
 
@@ -211,23 +216,22 @@ ggplot(gene_tib, aes(x = condition, y = expression))+
   geom_boxplot(outlier.size = 0)+
   geom_point()+
   labs (title = paste0("Expression of ", gene), x = "group", y = paste0("Normalized expression (", "Deseq2" , ")"))+
-  theme(axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 12))
+  theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size = 12))
+
+bulk_data <- readRDS(file = "bulk_data/merged_bulks_clean.rds")
 
 # //-=/-=/-=/-=/-=/-=/  GSVA  \=-\=-\=-\=-\=-\=-\=-\=-||
-library(GSVA)
+library(GSVAdata)
+library("pheatmap")
+data(c2BroadSets)
 
 # LOAD FUNCTIONAL GENE EXPRESSION SIGNATURES
-fges <- readRDS('E:/aula tumores/FGES_list.rds')
-fges <- fges[1:27]
-
-#Perform log-CPM normalization with edgeR
-bulkdata <- cpm(as.matrix(counts_matrix_cleaned2), log = T)
-#Convert matrix to ExpressionSet
+fges <- read.csv('bulk_data/FGES_29.csv')
+gene_sets <- split(fges$Gene, fges$Gene.signature)
+bulkdata <- cpm(as.matrix(bulkdata), log = T)
 bulkdata <- ExpressionSet(assayData = bulkdata)
 
-#Run GSVA
-#Gaussian for log CPM normalization, if raw counts provided used "Poisson"
-bulkPar <- gsvaParam(bulkdata, fges, maxDiff=FALSE, kcdf = "Gaussian")
+bulkPar <- gsvaParam(exprData = bulkdata, geneSets = gene_sets, maxDiff=FALSE, kcdf = "Gaussian")
 bulk_es <- gsva(bulkPar)
 
 #Plot Heatmap
@@ -235,4 +239,5 @@ hmcol <- colorRampPalette(brewer.pal(10, "RdBu"))(256)
 hmcol <- hmcol[length(hmcol):1]
 pheatmap(exprs(bulk_es), col = hmcol, scale = "row",
          cluster_cols = T, cluster_rows = T,
-         clustering_method = "ward.D2", angle_col = "45")
+         clustering_method = "ward.D2", angle_col = "45", fontsize_number = 12,
+         fontsize = 12, height = 10)
