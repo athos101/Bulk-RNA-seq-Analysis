@@ -1,0 +1,227 @@
+---
+title: "Differential Expression Analysis"
+output: html_document
+date: "2025-04-24"
+---
+
+### Loading libraries and the bulk counts
+
+```{r}
+library("tidyverse")
+library("edgeR")
+library("DESeq2") # If using Deseq2
+readCount <- readRDS(file = "bulk_data/merged_bulks_clean.rds")
+```
+
+We will show two pipelines: Wilcoxon and Deseq2.
+
+### WILCOXON TABLE PIPELINE
+
+In this analysis, when comparing control and positive samples, we need to separate the tissue origin. This is needed because tissue origin is most certainly an bias when searching for differences between conditions: we need to search within tissues.
+
+```{r}
+build_conditions <- function(names){
+  conditions <- data.frame(1)
+  for(name in names){
+    conditions[name] <- strsplit(name, "_")[[1]][3]
+  }
+  conditions <- conditions[2:(length(names)+1)]
+  conditions <- factor(t(conditions))
+  return(conditions)
+}
+```
+
+Preparing adjacent samples conditions:
+
+```{r}
+adj_samples <- lapply(colnames(readCount), FUN = function(name){
+  if(length(grep("ADJ", name))) return(name)
+})
+adj_samples <- Filter(Negate(is.null), adj_samples)
+bulk_adjs <- readCount[, (colnames(readCount) %in% adj_samples)]
+conditions_adj <- build_conditions(colnames(bulk_adjs))
+```
+
+Preparing tumor samples conditions:
+
+```{r}
+tum_samples <- lapply(colnames(readCount), FUN = function(name){
+  if(length(grep("TUM", name))) return(name)
+})
+tum_samples <- Filter(Negate(is.null), tum_samples)
+bulk_tums <- readCount[, (colnames(readCount) %in% tum_samples)]
+conditions_tum <- build_conditions(colnames(bulk_tums))
+```
+
+Here, we build a function to generate the Wilcoxon rank sum table. Pay attention to the fdr threshold value, It will filter the genes to be considered HVG.
+
+```{r}
+generate_wilcoxon_table <- function(readCount, conditions){
+  y <- DGEList(counts = readCount, group = conditions)
+  keep <- filterByExpr(y)
+  y <- y[keep, keep.lib.sizes = FALSE]
+  y <- calcNormFactors(y, method = "TMM")
+  count_norm <- cpm(y)
+  count_norm <- as.data.frame(count_norm)
+  pvalues <- sapply(1:nrow(count_norm), function(i){
+    data <- cbind.data.frame(gene = as.numeric(t(count_norm[i,])), conditions)
+    p <- wilcox.test(gene~conditions, data, exact=FALSE, correct=TRUE)$p.value
+    return(p)
+  })
+  fdr <- p.adjust(pvalues, method = "fdr")
+  conditionsLevel <- levels(conditions)
+  dataCon1 <- count_norm[,c(which(conditions==conditionsLevel[1]))]
+  dataCon2 <- count_norm[,c(which(conditions==conditionsLevel[2]))]
+  foldChanges <- log2(rowMeans(dataCon1)/rowMeans(dataCon2))
+
+  outRst <- data.frame(log2foldChange = foldChanges, pValues = pvalues, FDR = fdr)
+  rownames(outRst) <- rownames(count_norm)
+  outRst <- na.omit(outRst)
+  print(min(outRst$FDR, na.rm=TRUE))
+  fdrThres <- 0.05
+  print(head(outRst[outRst$FDR<fdrThres,]))
+  return(outRst[outRst$FDR<fdrThres,])
+}
+```
+
+We then save it for each tissue.
+
+```{r}
+wilcox_adj <- generate_wilcoxon_table(bulk_adjs, conditions_adj)
+write.table(wilcox_adj, file = "WCX_adj_rst.tsv", sep="\t", quote = F, row.names = T, col.names = T)
+wilcox_tum <- generate_wilcoxon_table(bulk_tums, conditions_tum)
+write.table(wilcox_tum, file = "WCX_tum_rst.tsv", sep="\t", quote = F, row.names = T, col.names = T)
+```
+
+### DESEQ2 PIPELINE
+
+Separating the conditions:
+
+```{r}
+deseq_conditions <- lapply(colnames(readCount), function(name){
+  pieces <- str_split(name, "_")
+  name <- paste(pieces[[1]][2], pieces[[1]][3], sep="_")
+  return(name)
+})
+
+my_colData <- as.data.frame(deseq_conditions)
+my_colData <- t(my_colData)
+rownames(my_colData) <- colnames(readCount)
+colnames(my_colData)[1] <- "deseq_conditions"
+deseq_conditions <- as.factors(deseq_conditions)
+```
+
+We run Deseq2 from our readCounts, and then run Variance Stabilizing Transformation (with a binomial regression model).
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = readCount,
+                              colData = my_colData,
+                              design = ~deseq_conditions)
+
+dds <- DESeq(dds)
+normalized_counts <- counts(dds, normalized = T)
+vsd <- vst(dds, blind = TRUE)
+```
+
+PCA variation plot between samples (clustering by means of expression similarity):
+
+```{r}
+library(ggrepel)
+plot_PCA = function (vsd.obj) {
+  pcaData <- plotPCA(vsd.obj,  intgroup = c("deseq_conditions"), returnData = T)
+  percentVar <- round(100 * attr(pcaData, "percentVar"))
+  ggplot(pcaData, aes(PC1, PC2, color=deseq_conditions)) +
+    geom_point(size=3) +
+    labs(x = paste0("PC1: ",percentVar[1],"% variance"),
+         y = paste0("PC2: ",percentVar[2],"% variance"),
+         title = "PCA Plot colored by condition") +
+    ggrepel::geom_text_repel(aes(label = name), color = "black")
+}
+plot_PCA(vsd)
+```
+
+Variable Genes Heatmap (for all samples)
+
+```{r}
+variable_gene_heatmap <- function (vsd.obj, num_genes = 500, title = "") {
+  brewer_palette <- "RdBu"
+  ramp <- colorRampPalette( RColorBrewer::brewer.pal(11, brewer_palette))
+  mr <- ramp(256)[256:1]
+  stabilized_counts <- assay(vsd.obj)
+  row_variances <- rowVars(stabilized_counts)
+  top_variable_genes <- stabilized_counts[order(row_variances, decreasing=T)[1:num_genes],]
+  top_variable_genes <- top_variable_genes - rowMeans(top_variable_genes, na.rm=T)
+  coldata <- as.data.frame(vsd.obj@colData)
+  coldata$sizeFactor <- NULL
+  pheatmap::pheatmap(top_variable_genes, color = mr, annotation_col = coldata, fontsize_col = 8, fontsize_row = 300/num_genes, border_color = NA, main = title)
+}
+
+variable_gene_heatmap(vsd, num_genes = 40)
+```
+
+Now, we analyse the DEGS between conditions within each sample:
+
+```{r}
+generate_DESeq_object <- function (my_data, groups) {
+  data_subset1 <- my_data[,grep(groups[1], colnames(my_data))]
+  data_subset2 <- my_data[,grep(groups[2], colnames(my_data))]
+  my_countData <- cbind(data_subset1, data_subset2)
+  condition <- c(rep(groups[1],ncol(data_subset1)), rep(groups[2],ncol(data_subset2)))
+  my_colData <- as.data.frame(condition)
+  rownames(my_colData) <- colnames(my_countData)
+  print(my_colData)
+  dds <- DESeqDataSetFromMatrix(countData = my_countData,colData = my_colData,design = ~ condition)
+  dds <- DESeq(dds, quiet = T)
+  return(dds)
+}
+
+tum_samples <- generate_DESeq_object(readCount, c("TUM_Control", "TUM_aPDL1"))
+adj_samples <- generate_DESeq_object(readCount, c("ADJ_Control", "ADJ_aPDL1"))
+
+tum_samples <- vst(tum_samples, blind = T)
+adj_samples <- vst(adj_samples, blind = T)
+
+a <- variable_gene_heatmap(tum_samples, 30, title = "Tumor variable genes")
+b <- variable_gene_heatmap(adj_samples, 30, title = "Adjacent variable genes")
+gridExtra::grid.arrange(a[[4]],b[[4]], nrow = 1)
+```
+
+Here, we search for a specific gene expression between different conditions. We can plot it for each sample, by doing "condition \<- rownames([dds\@coldata](mailto:dds@coldata){.email})"
+
+```{r}
+ig_genes <- rownames(dds)[grep("^IGHA", rownames(dds))]
+print(ig_genes)
+gene <- "IGHA1"
+
+normalized_data <- counts(dds, normalized = T)
+expression <- normalized_data[gene,]
+condition <- dds@colData$deseq_conditions
+gene_tib <- tibble(condition = condition, expression = expression)
+
+ggplot(gene_tib, aes(x = condition, y = expression))+
+  geom_boxplot(outlier.size = 0)+
+  geom_point()+
+  labs (title = paste0("Expression of ", gene), x = "group", y = paste0("Normalized expression (", "Deseq2" , ")"))+
+  theme(axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 12))
+```
+
+### Gene Set Expression Analysis
+
+```{r}
+#Perform log-CPM normalization with edgeR
+bulkdata <- cpm(as.matrix(counts_matrix_cleaned2), log = T)
+#Convert matrix to ExpressionSet
+bulkdata <- ExpressionSet(assayData = bulkdata)
+
+#Run GSVA
+#Gaussian for log CPM normalization, if raw counts provided used "Poisson"
+bulkPar <- gsvaParam(bulkdata, fges, maxDiff=FALSE, kcdf = "Gaussian")
+bulk_es <- gsva(bulkPar)
+
+#Plot Heatmap
+hmcol <- colorRampPalette(brewer.pal(10, "RdBu"))(256)
+hmcol <- hmcol[length(hmcol):1]
+pheatmap(exprs(bulk_es), col = hmcol, scale = "row",
+         cluster_cols = T, cluster_rows = T,
+         clustering_method = "ward.D2", angle_col = "45")
+```
