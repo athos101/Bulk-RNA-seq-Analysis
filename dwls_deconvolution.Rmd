@@ -1,6 +1,6 @@
 ---
 title: "DWLS DECONVOLUTION"
-author: "Athos Schuck"
+author: "Gabriel Pozo"
 date: "2025-04-26"
 output: html_document
 ---
@@ -158,6 +158,7 @@ deconvolution.results.dwls <- deconvolute(bulk_gene_expression = bulk_tpm,
                                           dwls_submethod = 'DampenedWLS')
 gc()
 ```
+
 Plotting results
 
 ```{r}
@@ -171,7 +172,9 @@ ggplot(df_long, aes(x = sample, y = fraction, fill = cell_type)) +
   labs(x = "Sample", y = "Fraction", fill = "Cell Type") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 ```
+
 Merging the results with the ground-truth
+
 ```{r}
 df_long <- df_long %>%
   dplyr::rename(
@@ -184,13 +187,17 @@ ct_frac$Freq <- NULL
 
 merged_df <- rbind(df_long, ct_frac)
 ```
+
 Step1:
+
 ```{r}
 # Step 1: Pivot wider to get ground_truth and deconvolution side-by-side
 df_wide <- merged_df %>%
   pivot_wider(names_from = Method, values_from = Percent)
 ```
+
 Spearman correlation:
+
 ```{r}
 cor_results <- df_wide %>%
   group_by(Cell_Type) %>%
@@ -202,7 +209,9 @@ barplot(cor_results$spearman_cor,
         main = "Spearman correlation per Cell Type",
         ylab = "Spearman correlation", ylim = c(-1, 1))
 ```
+
 Pearson correlation:
+
 ```{r}
 cor_results <- df_wide %>%
   group_by(Cell_Type) %>%
@@ -210,16 +219,18 @@ cor_results <- df_wide %>%
 ```
 
 Calculate median Spearman correlation / Pearson correlation
+
 ```{r}
 median_cor <- median(cor_results$spearman_cor, na.rm = TRUE)
 #median_cor <- median(cor_results$pearson_cor, na.rm = TRUE)
 # View the result
 print(median_cor)
 ```
+
 Subset scRNA matrix to retain only marker genes and run bisque and bayes
+
 ```{r}
 genes <- rownames(signature.matrix.dwls)
 sc_sub <- subset(sc_sub, features = genes)
 gc()
 ```
-
