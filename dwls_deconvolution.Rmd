@@ -1,0 +1,225 @@
+---
+title: "DWLS DECONVOLUTION"
+author: "Athos Schuck"
+date: "2025-04-26"
+output: html_document
+---
+
+### Loading Data
+
+Libraries
+
+```{r, echo=FALSE}
+library(BisqueRNA)
+library(Seurat)
+library(SeuratObject)
+library(ggplot2)
+library(tidyverse)
+library(pheatmap)
+library(dplyr)
+library(readr)
+library(SingleCellExperiment)
+library(DeconvoBuddies)
+library(DWLS)
+library(IOBR)
+library(omnideconv)
+```
+
+Bulk data
+
+```{r, echo=TRUE}
+bulkdata <- readRDS('bulk_data/merged_bulks_clean.rds')
+bulkdata <- as.matrix(bulkdata)
+bulk.eset <- ExpressionSet(assayData = bulkdata)
+rm(bulkdata)
+```
+
+Single-cell data
+
+```{r}
+sobj <- readRDS(file = '/mnt/hd6tb/athos_hub/rds_data/atlas_clean.rds')
+```
+
+Creating the ground-truth column
+
+```{r}
+metadata <- sobj@meta.data
+
+ct_frac <- table(metadata$celltype, metadata$patient)
+ct_frac <- as.data.frame(ct_frac)
+ct_frac$Var1 <- as.character(ct_frac$Var1)
+ct_frac$Var2 <- as.character(ct_frac$Var2)
+ct_frac = ct_frac %>% rename(Cell_Type = "Var1", Patient = "Var2") %>%
+  group_by(Patient) %>%
+  mutate(Percent = Freq / sum(Freq)*100)
+ct_frac$Method <- "ground_truth"
+```
+
+Plotting "ground truth" as interactive table
+
+```{r}
+ggplot(ct_frac, aes(x = Patient, y = Percent, fill = Cell_Type)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  scale_fill_manual(values = colors)+
+  labs(x = "Sample", y = "Fraction", fill = "Cell Type") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+Building the pseudobulk
+
+```{r}
+sobj <- SetIdent(sobj, value = sobj$patient)
+dfMeta <- sobj@meta.data
+dfMeta[, "barcode"] <- rownames(dfMeta)
+sampleIDs <- unique(dfMeta$patient)
+
+dfAllSum <- NULL
+for(sampleID in sampleIDs)
+{
+  cell_barcodes <- dfMeta[dfMeta[, "patient"] == sampleID, "barcode"]
+  sSample <- subset(sobj, cells = cell_barcodes)
+  message(paste0("Extracted ", length(cell_barcodes), " cells and ", nrow(sSample), " genes from SAMPLE: ", sampleID))
+  
+  # get summed gene counts
+  dfSum <- as.data.frame(rowSums(sSample@assays$RNA$counts))
+  colnames(dfSum) <- c(sampleID)
+  dfSum[, "gene"] <- rownames(dfSum)
+  if(is.null(dfAllSum)) {
+    dfAllSum <- dfSum
+  } else {
+    dfAllSum <- dplyr::left_join(dfAllSum, dfSum, by = "gene")
+  }
+}
+```
+
+Rearrange the columns to fit the gene by sample matrix
+
+```{r}
+dfAllSum <- dfAllSum[, c("gene", sampleIDs)]
+rownames(dfAllSum) <- dfAllSum$gene
+dfAllSum$gene <- NULL
+dfAllSum <- as.matrix(dfAllSum)
+bulkdata <- dfAllSum
+```
+
+Perform TPM for the pseudobulk
+
+```{r}
+bulk_tpm <- count2tpm(countMat = bulkdata, source = "biomart", idType = "Symbol")
+```
+
+Subsample the scRNAseq reference to up to 200 cells per cluster
+
+```{r}
+sobj <- SetIdent(sobj, value = sobj$patient)
+max_cells_per_celltype = 200
+sampled.metadata <- sobj@meta.data %>%
+  group_by(., celltype) %>% 
+  nest() %>%            
+  mutate(n =  map_dbl(data, nrow)) %>%
+  mutate(n = min(n, max_cells_per_celltype)) %>%
+  ungroup() %>% 
+  mutate(samp = map2(data, n, sample_n)) %>% 
+  select(-data) %>%
+  unnest(samp)
+
+sc_sub <- subset(sobj, cells = sampled.metadata$barcode)
+gc()
+dim(sc_sub)
+```
+
+Preparing input for DWLS
+
+```{r}
+counts.matrix <- as.matrix(GetAssayData(sc_sub, layer = "counts"))
+#rownames(counts.matrix) <- rownames(sc_sub)
+#colnames(counts.matrix) <- sc_sub@meta.data$barcode
+cell.type.annotations <- sc_sub$celltype
+batch.ids <- sc_sub$patient
+```
+
+Normalize data to fit DWLS
+
+```{r}
+signature.matrix.dwls <- omnideconv::build_model(single_cell_object = counts.matrix,
+                                                 cell_type_annotations = cell.type.annotations,
+                                                 method = 'dwls',
+                                                 dwls_method = 'mast_optimized')
+gc()
+```
+
+Running DWLS
+
+```{r}
+deconvolution.results.dwls <- deconvolute(bulk_gene_expression = bulk_tpm,
+                                          model = signature.matrix.dwls,
+                                          method='dwls',
+                                          dwls_submethod = 'DampenedWLS')
+gc()
+```
+Plotting results
+
+```{r}
+df_long <- as.data.frame(deconvolution.results.dwls) %>%
+  tibble::rownames_to_column("sample") %>%
+  pivot_longer(cols = -sample, names_to = "cell_type", values_to = "fraction")
+
+ggplot(df_long, aes(x = sample, y = fraction, fill = cell_type)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Sample", y = "Fraction", fill = "Cell Type") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+Merging the results with the ground-truth
+```{r}
+df_long <- df_long %>%
+  dplyr::rename(
+    Patient = sample,
+    Percent = fraction,
+    Cell_Type = cell_type)
+df_long$Method <- "DWLS"
+
+ct_frac$Freq <- NULL
+
+merged_df <- rbind(df_long, ct_frac)
+```
+Step1:
+```{r}
+# Step 1: Pivot wider to get ground_truth and deconvolution side-by-side
+df_wide <- merged_df %>%
+  pivot_wider(names_from = Method, values_from = Percent)
+```
+Spearman correlation:
+```{r}
+cor_results <- df_wide %>%
+  group_by(Cell_Type) %>%
+  summarize(spearman_cor = cor(ground_truth, DWLS, method = "spearman"))
+
+barplot(cor_results$spearman_cor,
+        names.arg = cor_results$Cell_Type,
+        las = 2, col = "skyblue",
+        main = "Spearman correlation per Cell Type",
+        ylab = "Spearman correlation", ylim = c(-1, 1))
+```
+Pearson correlation:
+```{r}
+cor_results <- df_wide %>%
+  group_by(Cell_Type) %>%
+  summarize(pearson_cor = cor(ground_truth, DWLS, method = "pearson"))
+```
+
+Calculate median Spearman correlation / Pearson correlation
+```{r}
+median_cor <- median(cor_results$spearman_cor, na.rm = TRUE)
+#median_cor <- median(cor_results$pearson_cor, na.rm = TRUE)
+# View the result
+print(median_cor)
+```
+Subset scRNA matrix to retain only marker genes and run bisque and bayes
+```{r}
+genes <- rownames(signature.matrix.dwls)
+sc_sub <- subset(sc_sub, features = genes)
+gc()
+```
+
