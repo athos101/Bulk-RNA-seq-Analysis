@@ -112,8 +112,17 @@ bisque_results <- res$bulk.props |> as.data.frame() |> t()
 
 ## Step 5: Plotting the cell type composition for the bulks:
 
-```{r}
+```{r, "composition_plots"}
+## make proption estimates long so they are ggplot friendly 
+prop_long <- bisque_results |>
+  as.data.frame() |>
+  rownames_to_column("Sample") |>
+  tidyr::pivot_longer(!Sample, names_to = "cell_type", values_to = "prop")
 
+## create composition bar plots
+#plot_composition_bar(prop_long = prop_long, sample_col = "Sample", x_col = "Dx")
+
+plot_composition_bar(prop_long = prop_long, sample_col = "Sample", x_col = "Sample", add_text = FALSE)
 ```
 
 ## Extra 1: Running pseudobulk for method evaluation.
