@@ -223,7 +223,6 @@ Calculate median Spearman correlation / Pearson correlation
 ```{r}
 median_cor <- median(cor_results$spearman_cor, na.rm = TRUE)
 #median_cor <- median(cor_results$pearson_cor, na.rm = TRUE)
-# View the result
 print(median_cor)
 ```
 

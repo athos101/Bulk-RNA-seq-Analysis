@@ -5,7 +5,7 @@ output: html_notebook
 
 This pipeline guides the deconvolution process of bulk RNA sequencing data, from preparing the bulk and single-cell reference to plotting the cell type proportions
 
-### Step 1: libraries needed
+## Step 1: libraries needed
 
 ```{r}
 library(BisqueRNA)

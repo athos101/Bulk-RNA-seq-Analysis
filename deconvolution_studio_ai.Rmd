@@ -1,0 +1,290 @@
+---
+title: "deconvolution_studio_ai"
+output: html_document
+date: "2025-07-27"
+---
+
+## Setup and installation of the required libraries
+
+```{r setup, include=FALSE}
+# Install CRAN packages if not already installed
+if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
+if (!requireNamespace("ggplot2", quietly = TRUE)) install.packages("ggplot2")
+if (!requireNamespace("pheatmap", quietly = TRUE)) install.packages("pheatmap")
+if (!requireNamespace("dplyr", quietly = TRUE)) install.packages("dplyr")
+if (!requireNamespace("tidyr", quietly = TRUE)) install.packages("tidyr")
+if (!requireNamespace("tibble", quietly = TRUE)) install.packages("tibble")
+if (!requireNamespace("RColorBrewer", quietly = TRUE)) install.packages("RColorBrewer")
+if (!requireNamespace("nnls", quietly = TRUE)) install.packages("nnls")
+
+
+# Install Bioconductor packages if not already installed
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+if (!requireNamespace("TCGAbiolinks", quietly = TRUE)) BiocManager::install("TCGAbiolinks")
+if (!requireNamespace("SummarizedExperiment", quietly = TRUE)) BiocManager::install("SummarizedExperiment")
+if (!requireNamespace("zellkonverter", quietly = TRUE)) BiocManager::install("zellkonverter")
+if (!requireNamespace("SingleCellExperiment", quietly = TRUE)) BiocManager::install("SingleCellExperiment")
+if (!requireNamespace("biomaRt", quietly = TRUE)) BiocManager::install("biomaRt")
+
+# Install Seurat from CRAN
+if (!requireNamespace("Seurat", quietly = TRUE)) install.packages("Seurat")
+
+# Load all libraries
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(zellkonverter)
+library(SingleCellExperiment)
+library(Seurat)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(nnls)
+library(ggplot2)
+library(pheatmap)
+library(RColorBrewer)
+```
+
+## TCGA Data Acquisition
+
+```{r}
+# Define the query for TCGA LUAD and LUSC
+query_tcga <- GDCquery(
+  project = c("TCGA-LUAD", "TCGA-LUSC"),
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "HTSeq - Counts"
+)
+
+# Download the data (this may take some time)
+GDCdownload(query_tcga, method = "api", files.per.chunk = 50)
+
+# Prepare the data into a SummarizedExperiment object
+tcga_data <- GDCprepare(query_tcga)
+
+print("TCGA data downloaded and prepared.")
+print(tcga_data)
+```
+
+## Single-cell RNA-seq reference
+
+```{r}
+# --- Load Single-Cell Data ---
+# Please download 'lung_atlas.h5ad' into the 'data' directory first.
+h5ad_path <- "C:/Users/athos/Downloads/bcells.h5ad"
+
+if (file.exists(h5ad_path)) {
+  # Read the .h5ad file into a SingleCellExperiment object
+  sce <- readH5AD(h5ad_path)
+  
+  # Convert to a Seurat object for easier handling (optional but common)
+  seurat_obj <- as.Seurat(sce, counts = "X", data = NULL)
+  
+  print("Single-cell reference loaded.")
+  print(seurat_obj)
+} else {
+  stop("Error: Single-cell reference 'data/lung_atlas.h5ad' not found. Please download it first.")
+}
+```
+
+## Data Preprocessing
+
+TCGA:
+
+```{r}
+# --- Filter for Primary Tumor Samples ---
+# TCGA sample barcodes: "01" indicates a primary solid tumor
+primary_tumor_samples <- colData(tcga_data)$sample_type == "Primary Tumor"
+tcga_counts <- assay(tcga_data[, primary_tumor_samples])
+
+print(paste("Original sample count:", ncol(assay(tcga_data))))
+print(paste("Primary tumor sample count:", ncol(tcga_counts)))
+
+# --- Normalize to CPM and Log-transform ---
+# A simple CPM function
+counts_to_cpm <- function(counts) {
+  t(t(counts) / colSums(counts) * 1e6)
+}
+tcga_cpm <- counts_to_cpm(tcga_counts)
+tcga_log_cpm <- log2(tcga_cpm + 1)
+
+print("TCGA data filtered and normalized to log2(CPM+1).")
+head(tcga_log_cpm[, 1:5])
+```
+
+## Creating a Signature Matrix from the Single-Cell Data
+
+```{r}
+# --- Create Signature Matrix ---
+# The cell type annotation is in the metadata slot
+# Check the column names to find the right one
+# For this atlas, a good one is 'ann_finest_level' or 'cell_type'
+CELLTYPE_KEY <- "cell_type" # Change if your annotation column is named differently
+if (!(CELLTYPE_KEY %in% colnames(seurat_obj@meta.data))) {
+  stop(paste("Metadata column", CELLTYPE_KEY, "not found in Seurat object."))
+}
+Idents(seurat_obj) <- seurat_obj[[CELLTYPE_KEY]]
+
+# Calculate average expression using the raw counts in the 'RNA' assay
+# This function automatically averages expression for each gene across idents (cell types)
+signature_matrix_raw <- AverageExpression(
+  seurat_obj,
+  assays = "RNA", # Use the raw counts
+  slot = "counts" # Use the counts slot, not normalized data
+)$RNA
+
+# The result is already in Genes x Celltypes format
+print("Signature matrix created.")
+print(dim(signature_matrix_raw))
+head(signature_matrix_raw)
+```
+
+## Gene Matching
+
+```{r}
+# --- Map Ensembl IDs to Gene Symbols for TCGA data ---
+# Remove version numbers from Ensembl IDs
+rownames(tcga_log_cpm) <- gsub("\\..*$", "", rownames(tcga_log_cpm))
+
+# Use biomaRt to get the mapping
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+gene_map <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol"),
+  filters = "ensembl_gene_id",
+  values = rownames(tcga_log_cpm),
+  mart = ensembl
+)
+
+# Filter for genes that have a symbol
+gene_map <- gene_map %>% filter(hgnc_symbol != "")
+
+# Aggregate duplicate gene symbols by taking the mean expression
+tcga_df <- as.data.frame(tcga_log_cpm) %>%
+  rownames_to_column("ensembl_gene_id") %>%
+  inner_join(gene_map, by = "ensembl_gene_id") %>%
+  select(-ensembl_gene_id) %>%
+  # Handle duplicates: group by symbol and take the mean
+  group_by(hgnc_symbol) %>%
+  summarise_all(mean) %>%
+  column_to_rownames("hgnc_symbol")
+
+tcga_final_matrix <- as.matrix(tcga_df)
+
+# --- Find and filter for common genes ---
+common_genes <- intersect(rownames(tcga_final_matrix), rownames(signature_matrix_raw))
+
+print(paste("Genes in TCGA (after mapping):", nrow(tcga_final_matrix)))
+print(paste("Genes in Signature Matrix:", nrow(signature_matrix_raw)))
+print(paste("Common genes:", length(common_genes)))
+
+# Filter both matrices
+signature_matrix_filtered <- signature_matrix_raw[common_genes, ]
+tcga_filtered <- tcga_final_matrix[common_genes, ]
+
+print("Data filtered to common genes.")
+```
+
+## DWLS Deconvolution
+
+```{r}
+# --- DWLS Deconvolution Function ---
+run_dwls <- function(S, B) {
+  # S: Signature matrix (Genes x Celltypes)
+  # B: Bulk expression vector for one sample (Genes)
+  
+  # 1. First-step NNLS to get initial coefficients
+  sol1 <- nnls(S, B)$x
+  
+  # 2. Calculate weights (add epsilon to avoid division by zero)
+  w <- 1 / ((S %*% sol1)^2 + 1e-6)
+  
+  # 3. Second-step weighted least squares
+  S_weighted <- diag(sqrt(w)) %*% S
+  B_weighted <- sqrt(w) * B
+  
+  # Solve the weighted NNLS problem
+  sol2 <- nnls(S_weighted, B_weighted)$x
+  
+  # 4. Normalize proportions to sum to 1
+  proportions <- sol2 / sum(sol2)
+  names(proportions) <- colnames(S)
+  
+  return(proportions)
+}
+
+# --- Run deconvolution for all TCGA samples ---
+# Use apply to run the function over each column (sample) of the TCGA matrix
+results_list <- apply(tcga_filtered, 2, function(sample_col) {
+  run_dwls(as.matrix(signature_matrix_filtered), sample_col)
+})
+
+# Combine results into a single data frame
+deconvolution_results_df <- as.data.frame(t(results_list))
+
+print("Deconvolution complete.")
+head(deconvolution_results_df)
+```
+
+## Visualization
+
+```{r}
+# --- Prepare data for ggplot (long format) ---
+results_long <- deconvolution_results_df %>%
+  rownames_to_column("SampleID") %>%
+  pivot_longer(
+    -SampleID,
+    names_to = "CellType",
+    values_to = "Proportion"
+  )
+
+# --- Stacked Bar Plot ---
+# For clarity, plot a subset of samples (e.g., first 50)
+sample_subset <- unique(results_long$SampleID)[1:min(50, length(unique(results_long$SampleID)))]
+
+# Define a color palette
+num_colors <- length(unique(results_long$CellType))
+color_palette <- colorRampPalette(brewer.pal(12, "Paired"))(num_colors)
+
+ggplot(
+  filter(results_long, SampleID %in% sample_subset), 
+  aes(x = SampleID, y = Proportion, fill = CellType)
+) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = color_palette) +
+  labs(
+    title = paste("Cell Type Proportions in TCGA LUAD/LUSC Samples (First", length(sample_subset), "Samples)"),
+    x = "TCGA Sample ID",
+    y = "Proportion"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+    legend.position = "right"
+  )
+
+# --- Clustered Heatmap ---
+pheatmap(
+  deconvolution_results_df,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = FALSE, # Hide sample names for clarity
+  main = "Hierarchically Clustered Heatmap of Cell Type Proportions",
+  color = viridis::viridis(100),
+  fontsize_col = 8
+)
+```
+
+### Summary and Considerations
+
+This R-based pipeline provides a robust and reproducible workflow for deconvolution.
+
+-   Reproducibility: Using TCGAbiolinks ensures that the data acquisition is scriptable and reproducible.
+
+-   Gene ID Mapping: The use of biomaRt is a standard and reliable method for handling the common issue of mismatched gene identifiers between datasets.
+
+-   Ecosystem: The pipeline leverages the strengths of the R/Bioconductor ecosystem, using specialized objects like SummarizedExperiment and Seurat which are designed for this type of data.
+
+-   Signature Matrix: The quality of the signature matrix is paramount. Consider using marker genes (identifiable with Seurat::FindAllMarkers) instead of all genes to potentially reduce noise and improve accuracy.
+
+-   Normalization: We used log2(CPM+1). While common, be mindful of its assumptions. If your datasets have strong compositional biases, more advanced normalization methods like TMM (from edgeR) might be considered before the log-transform.
+
+-   Batch Effects: There are inherent technical differences between bulk RNA-seq (TCGA) and scRNA-seq. The DWLS method is designed to be somewhat robust to this, but for advanced analyses, you might explore batch correction methods.
